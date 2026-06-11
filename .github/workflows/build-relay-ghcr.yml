@@ -1,0 +1,90 @@
+name: Build relay-server (self)
+
+# 自用精简版:构建 relay-server 镜像并推到本仓库属主的 GHCR。
+# 不依赖上游的 release guard / Docker Hub / GitHub App secrets,GHCR 用内置 GITHUB_TOKEN。
+# 触发:Actions 页面手动 Run workflow(或 gh workflow run build-relay-ghcr.yml)。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "构建哪个 ref(分支/tag/commit)"
+        required: true
+        default: "dev"
+        type: string
+      platforms:
+        description: "目标架构(k3s 节点是 x86_64 用 linux/amd64;arm 节点用 linux/arm64;逗号分隔可多选)"
+        required: true
+        default: "linux/amd64"
+        type: string
+      push_dev_tag:
+        description: "同时推 :dev 浮动 tag"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: Build & push relay-server → GHCR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 1
+
+      - name: Resolve tags
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          image="ghcr.io/${owner}/happier-relay-server"
+          sha="$(git rev-parse --short=9 HEAD)"
+          date="$(date -u +%Y%m%d)"
+          tags="${image}:dev-${date}-${sha}"
+          if [ "${{ inputs.push_dev_tag }}" = "true" ]; then
+            tags="${tags},${image}:dev"
+          fi
+          echo "tags=${tags}" >> "$GITHUB_OUTPUT"
+          echo "构建 ${tags}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: relay-server
+          platforms: ${{ inputs.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        shell: bash
+        run: |
+          {
+            echo "## relay-server 镜像已推送"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}" | tr ',' '\n'
+            echo '```'
+            echo "k3s 使用前:若包是 private,需在 GitHub Packages 设为 public 或给集群配 imagePullSecret。"
+          } >> "$GITHUB_STEP_SUMMARY"
