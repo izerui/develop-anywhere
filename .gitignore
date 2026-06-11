@@ -140,3 +140,4 @@ _.env.pipeline.production.local
 /.playwright-mcp
 /.clawpatch
 /apply_fix.py
+.idea/
